@@ -1,0 +1,44 @@
+# Shared environment for postgres and app.
+# POSTGRES_USER/POSTGRES_DB make the postgres image create the app role and
+# database before db/init.sh runs; init.sh then creates the tables.
+x-env: &env
+  POSTGRES_USER: ${PYCWA_USER:-pycwa}
+  POSTGRES_DB: ${PYCWA_DATABASE:-pycwa}
+  POSTGRES_PASSWORD: ${PYCWA_PASSWORD:?set PYCWA_PASSWORD}
+  PYCWA_USER: ${PYCWA_USER:-pycwa}
+  PYCWA_DATABASE: ${PYCWA_DATABASE:-pycwa}
+  PYCWA_PASSWORD: ${PYCWA_PASSWORD}
+  PYCWA_DB_HOST: postgres
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    shm_size: 256m
+    environment: *env
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./db/init.sh:/docker-entrypoint-initdb.d/init-user-db.sh
+    healthcheck:
+      # TCP check: during init the temporary server listens on the unix socket only
+      test: ["CMD-SHELL", 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      retries: 10
+
+  app:
+    # CI passes IMAGE (registry image tagged with the commit SHA); locally it is built from ./src
+    image: ${IMAGE:-pycwa:dev}
+    build: ./src
+    restart: unless-stopped
+    environment: *env
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  adminer:
+    image: adminer:5.3.0
+    restart: unless-stopped
+    ports: ["8090:8080"]
+
+volumes:
+  db:

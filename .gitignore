@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+
+# Docker creds (DOCKER_CONFIG from CI)
+.docker/
+
+# Local secrets
+.env
+.env.test
+.env.staging
+
+# Local backups
+db/init.sh.bak
+
+# Generated reports
+reports/
+
+.trivycache/

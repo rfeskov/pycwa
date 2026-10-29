@@ -1,0 +1,30 @@
+<div class="container">
+  <div class="row">
+    <div class="col-3">&nbsp;</div>
+    <div class="col-6">
+      <p>
+        <form id="debug" action="/debug" method="get">
+        <input type="hidden" id="query64" name="query64" value="{template_query64}">
+        
+        <div class="input-group mb-3">
+          <input type="text" id="query" value="{template_query}" class="form-control" aria-describedby="buttonSubmit">
+          <button type="submit" class="btn btn-outline-secondary" type="button" id="buttonSubmit">Отправить</button>
+        </div>
+        </form>
+      </p>
+    </div>
+    <div class="col-3">&nbsp;</div>
+  </div>
+
+  <div class="row">
+    <div class="col-3">&nbsp;</div>
+    <div class="col-6">
+      <p>
+        <pre>{template_output}</pre>
+      </p>
+    </div>
+    <div class="col-3">&nbsp;</div>
+  </div>  
+</div>
+
+<script src="{template_js_debug}"></script>

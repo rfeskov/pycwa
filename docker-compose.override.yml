@@ -1,0 +1,7 @@
+services:
+  app:
+    volumes:
+      - ./src/app:/pycwa/app
+    environment:
+      FLASK_DEBUG: 1
+      PYTHONUNBUFFERED: 1

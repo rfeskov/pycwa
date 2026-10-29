@@ -1,0 +1,140 @@
+# One shell runner: docker/compose jobs (build, test, staging, zap).
+# Docker executor only for CLI tools: gitleaks, semgrep, trivy.
+# Required GitFlic CI variables: REGISTRY, GITFLIC_USER, GITFLIC_TOKEN, DB_PASSWORD.
+# Images are tagged with $CI_COMMIT_SHA; a git tag vX.Y.Z re-tags the same image.
+
+stages: [build, test, staging, publish]
+
+variables:
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE/pycwa"
+  IMAGE: "$IMAGE_NAME:$CI_COMMIT_SHA"
+  STAGING_URL: "http://localhost:8080"        # single shell runner: staging and zap share the host
+  COMPOSE_FILE: docker-compose.yml
+  PYCWA_PASSWORD: $DB_PASSWORD
+  DOCKER_CONFIG: "$CI_PROJECT_DIR/.docker"    # isolated registry credentials per job
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:latest   # TODO: pin version
+  SEMGREP_IMAGE: semgrep/semgrep:latest              # TODO: pin version
+  TRIVY_IMAGE: aquasec/trivy:0.76.1
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable          # TODO: pin version
+
+.registry:
+  tags: [shell]
+  before_script:
+    - test -n "$CI_REGISTRY" || { echo "CI_REGISTRY is empty - registry is not enabled"; exit 1; }
+    - echo "$GITFLIC_TOKEN" | docker login "$CI_REGISTRY" -u "$GITFLIC_USER" --password-stdin
+  after_script:
+    - rm -rf "$DOCKER_CONFIG"
+
+# ---------- build ----------
+build:
+  extends: .registry
+  stage: build
+  script:
+    - docker build --pull -t "$IMAGE" ./src
+    - docker push "$IMAGE"
+
+gitleaks:
+  stage: build
+  tags: [docker]
+  image: { name: "$GITLEAKS_IMAGE", entrypoint: [""] }
+  variables:
+    GIT_DEPTH: 0   # full history scan
+  script:
+    - mkdir -p reports
+    - gitleaks git . --redact --report-format json --report-path reports/gitleaks.json
+  artifacts: { when: always, paths: [reports/gitleaks.json] }
+
+semgrep:
+  stage: build
+  tags: [docker]
+  image: { name: "$SEMGREP_IMAGE", entrypoint: [""] }
+  script:
+    - mkdir -p reports
+    - semgrep scan --config p/python --metrics=off --strict --json-output reports/semgrep.json src
+  artifacts: { when: always, paths: [reports/semgrep.json] }
+
+# ---------- test ----------
+test:
+  stage: test
+  needs: []   # starts immediately, built image not required
+  tags: [shell]
+  variables:
+    COMPOSE_PROJECT_NAME: "pycwa-test-$CI_PIPELINE_ID"
+    PYCWA_PASSWORD: $TEST_DB_PASSWORD
+  script:
+    - python3 -m venv .venv && . .venv/bin/activate
+    - pip3 install -r src/requirements.txt
+    - docker compose up -d --wait postgres
+    - export PYCWA_DB_HOST=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q postgres)")
+    - pytest -v
+  after_script:
+    - '[ "$CI_JOB_STATUS" = success ] || docker compose logs --no-color --tail=50 postgres || true'
+    - docker compose down -v --remove-orphans
+
+trivy:
+  stage: test
+  needs: [build]
+  tags: [docker]
+  image: { name: "$TRIVY_IMAGE", entrypoint: [""] }
+  variables:
+    TRIVY_CACHE_DIR: .trivycache
+    TRIVY_USERNAME: $GITFLIC_USER
+    TRIVY_PASSWORD: $GITFLIC_TOKEN
+    TRIVY_INSECURE: "true"
+    TRIVY_TIMEOUT: 15m
+  script:
+    - mkdir -p reports
+    - trivy image --format json --output reports/trivy.json "$IMAGE"
+    - trivy image --format cyclonedx --output reports/sbom.cdx.json "$IMAGE"
+    - trivy image --ignore-unfixed --severity HIGH,CRITICAL "$IMAGE"
+  artifacts: { when: always, paths: [reports/trivy.json, reports/sbom.cdx.json] }
+
+# ---------- staging (manual only) ----------
+.staging:
+  stage: staging
+  extends: .registry
+  variables: { COMPOSE_PROJECT_NAME: pycwa-staging }
+
+staging_up:
+  extends: .staging
+  when: manual
+  script:
+    - docker compose pull app
+    - docker compose up -d --wait --no-build postgres app
+    - curl -fsS --retry 12 --retry-delay 5 --retry-connrefused -o /dev/null "$STAGING_URL"
+  after_script:
+    - docker compose logs --no-color --tail=100 || true
+    - rm -rf "$DOCKER_CONFIG"
+
+zap:
+  stage: staging
+  needs: [staging_up]
+  tags: [shell]
+  script:
+    - mkdir -p reports
+    # run as root (ZAP requires it), chown hands results back to the runner user
+    - |
+      docker run --rm --network host --entrypoint "" -u root \
+        -e STAGING_URL -e OWNER="$(id -u):$(id -g)" \
+        -v "$PWD/reports:/zap/wrk" "$ZAP_IMAGE" \
+        sh -c 'zap-baseline.py -t "$STAGING_URL" -m 1 -T 10 -I -J /zap/wrk/zap.json; rc=$?; chown -R "$OWNER" /zap/wrk; exit $rc'
+  artifacts: { when: always, paths: [reports/zap.json] }
+
+staging_down:
+  extends: .staging
+  when: manual
+  script:
+    - docker compose down -v --remove-orphans
+
+# ---------- publish ----------
+# git tag vX.Y.Z re-tags the built image; no latest anywhere
+publish:
+  extends: .registry
+  stage: publish
+  needs: [build, gitleaks, semgrep, test, trivy]
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - docker pull "$IMAGE"
+    - docker tag "$IMAGE" "$IMAGE_NAME:$CI_COMMIT_TAG"
+    - docker push "$IMAGE_NAME:$CI_COMMIT_TAG"

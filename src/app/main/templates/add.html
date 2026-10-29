@@ -1,0 +1,43 @@
+<div class="container">
+  <div class="row">
+    <div class="col-3">&nbsp;</div>
+    <div class="col-6">
+      <h1>Добавить</h1>
+      <form id="add" action="/add" method="post">
+        <div class="mb-3">
+          <label for="textFirstName" class="form-label">Имя</label>
+          <input type="text" class="form-control" name="first_name" id="textFirstName">
+        </div>
+
+        <div class="mb-3">
+          <label for="textLastName" class="form-label">Фамилия</label>
+          <input type="text" class="form-control" name="last_name" id="textLastName">
+        </div>
+
+        <div class="mb-3">
+          <label for="textNumber" class="form-label">Номер</label>
+          <input type="text" class="form-control" name="number" id="textNumber">
+        </div>
+
+        <button type="submit" class="btn btn-primary">Добавить</button>
+      </form>
+    </div>
+    <div class="col-3">&nbsp;</div>
+  </div>
+</div>
+
+<div id="toastError" class="toast align-items-center" role="alert" aria-live="assertive" aria-atomic="true">
+  <div class="d-flex">
+    <div class="toast-body">Ошибка добавления записи.</div>
+    <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+  </div>
+</div>
+
+<div id="toastSuccess" class="toast align-items-center" role="alert" aria-live="assertive" aria-atomic="true">
+  <div class="d-flex">
+    <div class="toast-body">Запись успешно добавлена!</div>
+    <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+  </div>
+</div>
+
+<script src="{template_js_add}"></script>
