@@ -12,10 +12,10 @@ variables:
   COMPOSE_FILE: docker-compose.yml
   PYCWA_PASSWORD: $DB_PASSWORD
   DOCKER_CONFIG: "$CI_PROJECT_DIR/.docker"    # isolated registry credentials per job
-  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:latest   # TODO: pin version
-  SEMGREP_IMAGE: semgrep/semgrep:latest              # TODO: pin version
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
+  SEMGREP_IMAGE: semgrep/semgrep:1.182.0
   TRIVY_IMAGE: aquasec/trivy:0.76.1
-  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable          # TODO: pin version
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.17.0
 
 .registry:
   tags: [shell]
@@ -42,7 +42,7 @@ gitleaks:
   script:
     - mkdir -p reports
     - gitleaks git . --redact --report-format json --report-path reports/gitleaks.json
-  artifacts: { when: always, paths: [reports/gitleaks.json] }
+  artifacts: { when: always, expire_in: 1 week, paths: [reports/gitleaks.json] }
 
 semgrep:
   stage: build
@@ -52,7 +52,7 @@ semgrep:
   script:
     - mkdir -p reports
     - semgrep scan --config p/python --metrics=off --strict --error --json-output reports/semgrep.json src
-  artifacts: { when: always, paths: [reports/semgrep.json] }
+  artifacts: { when: always, expire_in: 1 week, paths: [reports/semgrep.json] }
 
 # ---------- test ----------
 test:
@@ -81,22 +81,26 @@ trivy:
   allow_failure: true   # HIGH/CRITICAL turn the job orange but do not block staging/publish
   variables:
     TRIVY_CACHE: pycwa-trivy-cache
+    TRIVY_USERNAME: $GITFLIC_USER
+    TRIVY_PASSWORD: $GITFLIC_TOKEN
+    TRIVY_INSECURE: "true"
+    TRIVY_TIMEOUT: 15m
   script:
     - mkdir -p reports
     - >
       docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
-      -e IMAGE -e TRIVY_USERNAME="$GITFLIC_USER" -e TRIVY_PASSWORD="$GITFLIC_TOKEN" -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE -e TRIVY_TIMEOUT
       "$TRIVY_IMAGE" trivy image --format json --output reports/trivy.json "$IMAGE"
     - >
       docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
-      -e IMAGE -e TRIVY_USERNAME="$GITFLIC_USER" -e TRIVY_PASSWORD="$GITFLIC_TOKEN" -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE -e TRIVY_TIMEOUT
       "$TRIVY_IMAGE" trivy image --format cyclonedx --output reports/sbom.cdx.json "$IMAGE"
     # gate: exit 1 on HIGH/CRITICAL, downgraded to a warning by allow_failure above
     - >
       docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
-      -e IMAGE -e TRIVY_USERNAME="$GITFLIC_USER" -e TRIVY_PASSWORD="$GITFLIC_TOKEN" -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE -e TRIVY_TIMEOUT
       "$TRIVY_IMAGE" trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL "$IMAGE"
-  artifacts: { when: always, paths: [reports/trivy.json, reports/sbom.cdx.json] }
+  artifacts: { when: always, expire_in: 1 week, paths: [reports/trivy.json, reports/sbom.cdx.json] }
 
 # ---------- staging (manual only) ----------
 .staging:
@@ -120,15 +124,17 @@ zap:
   stage: staging
   needs: [staging_up]
   tags: [shell]
+  allow_failure: true   # WARN/FAIL turn the job orange but do not block staging/publish
   script:
     - mkdir -p reports
     # run as root (ZAP requires it), chown hands results back to the runner user
+    # -J must be RELATIVE to /zap/wrk: the baseline script doubles absolute paths
     - |
       docker run --rm --network host --entrypoint "" -u root \
         -e STAGING_URL -e OWNER="$(id -u):$(id -g)" \
         -v "$PWD/reports:/zap/wrk" "$ZAP_IMAGE" \
-        sh -c 'zap-baseline.py -t "$STAGING_URL" -m 1 -T 10 -I -J /zap/wrk/zap.json; rc=$?; chown -R "$OWNER" /zap/wrk; exit $rc'
-  artifacts: { when: always, paths: [reports/zap.json] }
+        sh -c 'zap-baseline.py -t "$STAGING_URL" -m 1 -T 10 -I -J zap.json; rc=$?; chown -R "$OWNER" /zap/wrk; exit $rc'
+  artifacts: { when: always, expire_in: 1 week, paths: [reports/zap.json] }
 
 staging_down:
   extends: .staging
