@@ -85,16 +85,16 @@ trivy:
     - mkdir -p reports
     - >
       docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
-      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      -e IMAGE -e TRIVY_USERNAME="$GITFLIC_USER" -e TRIVY_PASSWORD="$GITFLIC_TOKEN" -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
       "$TRIVY_IMAGE" trivy image --format json --output reports/trivy.json "$IMAGE"
     - >
       docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
-      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      -e IMAGE -e TRIVY_USERNAME="$GITFLIC_USER" -e TRIVY_PASSWORD="$GITFLIC_TOKEN" -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
       "$TRIVY_IMAGE" trivy image --format cyclonedx --output reports/sbom.cdx.json "$IMAGE"
     # gate: exit 1 on HIGH/CRITICAL, downgraded to a warning by allow_failure above
     - >
       docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
-      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      -e IMAGE -e TRIVY_USERNAME="$GITFLIC_USER" -e TRIVY_PASSWORD="$GITFLIC_TOKEN" -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
       "$TRIVY_IMAGE" trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL "$IMAGE"
   artifacts: { when: always, paths: [reports/trivy.json, reports/sbom.cdx.json] }
 
