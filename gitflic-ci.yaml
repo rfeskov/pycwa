@@ -1,6 +1,6 @@
 # One shell runner: docker/compose jobs (build, test, staging, zap).
-# Docker executor only for CLI tools: gitleaks, semgrep, trivy.
-# Required GitFlic CI variables: REGISTRY, GITFLIC_USER, GITFLIC_TOKEN, DB_PASSWORD.
+# Docker executor only for CLI tools: gitleaks, semgrep.
+# Required GitFlic CI variables: GITFLIC_USER, GITFLIC_TOKEN, DB_PASSWORD, TEST_DB_PASSWORD.
 # Images are tagged with $CI_COMMIT_SHA; a git tag vX.Y.Z re-tags the same image.
 
 stages: [build, test, staging, publish]
@@ -48,9 +48,10 @@ semgrep:
   stage: build
   tags: [docker]
   image: { name: "$SEMGREP_IMAGE", entrypoint: [""] }
+  allow_failure: true   # findings turn the job orange but do not block staging/publish
   script:
     - mkdir -p reports
-    - semgrep scan --config p/python --metrics=off --strict --json-output reports/semgrep.json src
+    - semgrep scan --config p/python --metrics=off --strict --error --json-output reports/semgrep.json src
   artifacts: { when: always, paths: [reports/semgrep.json] }
 
 # ---------- test ----------
@@ -62,6 +63,8 @@ test:
     COMPOSE_PROJECT_NAME: "pycwa-test-$CI_PIPELINE_ID"
     PYCWA_PASSWORD: $TEST_DB_PASSWORD
   script:
+    # bind mount keeps host file perms; postgres inside the container (uid 999) must be able to read it
+    - chmod 0644 db/init.sh
     - python3 -m venv .venv && . .venv/bin/activate
     - pip3 install -r src/requirements.txt
     - docker compose up -d --wait postgres
@@ -74,19 +77,25 @@ test:
 trivy:
   stage: test
   needs: [build]
-  tags: [docker]
-  image: { name: "$TRIVY_IMAGE", entrypoint: [""] }
+  tags: [shell]   # DB cache lives in a named volume on the runner host, not in an ephemeral container
+  allow_failure: true   # HIGH/CRITICAL turn the job orange but do not block staging/publish
   variables:
-    TRIVY_CACHE_DIR: .trivycache
-    TRIVY_USERNAME: $GITFLIC_USER
-    TRIVY_PASSWORD: $GITFLIC_TOKEN
-    TRIVY_INSECURE: "true"
-    TRIVY_TIMEOUT: 15m
+    TRIVY_CACHE: pycwa-trivy-cache
   script:
     - mkdir -p reports
-    - trivy image --format json --output reports/trivy.json "$IMAGE"
-    - trivy image --format cyclonedx --output reports/sbom.cdx.json "$IMAGE"
-    - trivy image --ignore-unfixed --severity HIGH,CRITICAL "$IMAGE"
+    - >
+      docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
+      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      "$TRIVY_IMAGE" trivy image --format json --output reports/trivy.json "$IMAGE"
+    - >
+      docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
+      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      "$TRIVY_IMAGE" trivy image --format cyclonedx --output reports/sbom.cdx.json "$IMAGE"
+    # gate: exit 1 on HIGH/CRITICAL, downgraded to a warning by allow_failure above
+    - >
+      docker run --rm --entrypoint "" -v "$TRIVY_CACHE:/root/.cache/trivy" -v "$PWD:/work" -w /work
+      -e IMAGE -e TRIVY_USERNAME -e TRIVY_PASSWORD -e TRIVY_INSECURE=true -e TRIVY_TIMEOUT=15m
+      "$TRIVY_IMAGE" trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL "$IMAGE"
   artifacts: { when: always, paths: [reports/trivy.json, reports/sbom.cdx.json] }
 
 # ---------- staging (manual only) ----------
@@ -99,6 +108,7 @@ staging_up:
   extends: .staging
   when: manual
   script:
+    - chmod 0644 db/init.sh
     - docker compose pull app
     - docker compose up -d --wait --no-build postgres app
     - curl -fsS --retry 12 --retry-delay 5 --retry-connrefused -o /dev/null "$STAGING_URL"
