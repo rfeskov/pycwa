@@ -20,9 +20,7 @@ variables:
 .registry:
   tags: [shell]
   before_script:
-    - echo "R=$CI_REGISTRY RI=$CI_REGISTRY_IMAGE PU=$CI_PROJECT_URL"
     - test -n "$CI_REGISTRY" || { echo "CI_REGISTRY is empty - registry is not enabled"; exit 1; }
-    - echo "REGISTRY=$CI_REGISTRY"
     - echo "$GITFLIC_TOKEN" | docker login "$CI_REGISTRY" -u "$GITFLIC_USER" --password-stdin
   after_script:
     - rm -rf "$DOCKER_CONFIG"
